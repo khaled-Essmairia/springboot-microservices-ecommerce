@@ -1,5 +1,7 @@
 package com.microservice.orderservice.service;
 
+import com.microservice.orderservice.client.PaymentService;
+import com.microservice.orderservice.client.ProductService;
 import com.microservice.orderservice.exception.OrderServiceCustomException;
 import com.microservice.orderservice.model.Order;
 import com.microservice.orderservice.payload.OrderRequest;
@@ -8,7 +10,6 @@ import com.microservice.orderservice.payload.PaymentRequest;
 import com.microservice.orderservice.payload.PaymentResponse;
 import com.microservice.orderservice.payload.ProductResponse;
 import com.microservice.orderservice.repository.OrderRepository;
-import com.microservice.orderservice.service.OrderService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 import org.springframework.stereotype.Service;
@@ -21,107 +22,123 @@ import java.time.Instant;
 @RequiredArgsConstructor
 public class OrderServiceImpl implements OrderService {
 
-    private final OrderRepository orderRepository;
+        private final OrderRepository orderRepository;
 
-    private final RestTemplate restTemplate;
+        private final RestTemplate restTemplate;
 
-    @Override
-    public long placeOrder(OrderRequest orderRequest) {
+        // Change the placeOrder method to Use Feign Client
+        // First, inject both the Feign clients:
 
-        log.info("OrderServiceImpl | placeOrder is called");
+        private final ProductService productService;
 
-        // Order Entity -> Save the data with Status Order Created
-        // Product Service - Block Products (Reduce the Quantity)
-        // Payment Service -> Payments -> Success-> COMPLETE, Else
-        // CANCELLED
+        private final PaymentService paymentService;
 
-        log.info("OrderServiceImpl | placeOrder | Placing Order Request orderRequest : " + orderRequest.toString());
+        @Override
+        public long placeOrder(OrderRequest orderRequest) {
 
-        log.info("OrderServiceImpl | placeOrder | Creating Order with Status CREATED");
-        Order order = Order.builder()
-                .amount(orderRequest.getTotalAmount())
-                .orderStatus("CREATED")
-                .productId(orderRequest.getProductId())
-                .orderDate(Instant.now())
-                .quantity(orderRequest.getQuantity())
-                .build();
+                log.info("OrderServiceImpl | placeOrder is called");
 
-        order = orderRepository.save(order);
+                // Order Entity -> Save the data with Status Order Created
+                // Product Service - Block Products (Reduce the Quantity)
+                // Payment Service -> Payments -> Success-> COMPLETE, Else
+                // CANCELLED
 
-        log.info("OrderServiceImpl | placeOrder | Calling Payment Service to complete the payment");
+                log.info("OrderServiceImpl | placeOrder | Placing Order Request orderRequest : "
+                                + orderRequest.toString());
 
-        PaymentRequest paymentRequest = PaymentRequest.builder()
-                .orderId(order.getId())
-                .paymentMode(orderRequest.getPaymentMode())
-                .amount(orderRequest.getTotalAmount())
-                .build();
+                // Next, use its methods:
 
-        String orderStatus = null;
+                productService.reduceQuantity(orderRequest.getProductId(), orderRequest.getQuantity());
 
-        try {
-            log.info("OrderServiceImpl | placeOrder | Payment done Successfully. Changing the Oder status to PLACED");
-            orderStatus = "PLACED";
-        } catch (Exception e) {
-            log.error(
-                    "OrderServiceImpl | placeOrder | Error occurred in payment. Changing order status to PAYMENT_FAILED");
-            orderStatus = "PAYMENT_FAILED";
+                log.info("OrderServiceImpl | placeOrder | Creating Order with Status CREATED");
+
+                Order order = Order.builder()
+                                .amount(orderRequest.getTotalAmount())
+                                .orderStatus("CREATED")
+                                .productId(orderRequest.getProductId())
+                                .orderDate(Instant.now())
+                                .quantity(orderRequest.getQuantity())
+                                .build();
+
+                order = orderRepository.save(order);
+
+                log.info("OrderServiceImpl | placeOrder | Calling Payment Service to complete the payment");
+
+                PaymentRequest paymentRequest = PaymentRequest.builder()
+                                .orderId(order.getId())
+                                .paymentMode(orderRequest.getPaymentMode())
+                                .amount(orderRequest.getTotalAmount())
+                                .build();
+
+                String orderStatus = null;
+
+                try {
+                        // Next, use its methods:
+                        paymentService.doPayment(paymentRequest);
+                        log.info("OrderServiceImpl | placeOrder | Payment done Successfully. Changing the Oder status to PLACED");
+                        orderStatus = "PLACED";
+                } catch (Exception e) {
+                        log.error(
+                                        "OrderServiceImpl | placeOrder | Error occurred in payment. Changing order status to PAYMENT_FAILED");
+                        orderStatus = "PAYMENT_FAILED";
+                }
+
+                order.setOrderStatus(orderStatus);
+
+                orderRepository.save(order);
+
+                log.info("OrderServiceImpl | placeOrder | Order Places successfully with Order Id: {}", order.getId());
+
+                return order.getId();
         }
 
-        order.setOrderStatus(orderStatus);
+        @Override
+        public OrderResponse getOrderDetails(long orderId) {
 
-        orderRepository.save(order);
+                log.info("OrderServiceImpl | getOrderDetails | Get order details for Order Id : {}", orderId);
 
-        log.info("OrderServiceImpl | placeOrder | Order Places successfully with Order Id: {}", order.getId());
+                Order order = orderRepository.findById(orderId)
+                                .orElseThrow(() -> new OrderServiceCustomException(
+                                                "Order not found for the order Id:" + orderId,
+                                                "NOT_FOUND",
+                                                404));
 
-        return order.getId();
-    }
+                log.info("OrderServiceImpl | getOrderDetails | Invoking Product service to fetch the product for id: {}",
+                                order.getProductId());
+                ProductResponse productResponse = restTemplate.getForObject(
+                                "http://PRODUCT-SERVICE/product/" + order.getProductId(),
+                                ProductResponse.class);
 
-    @Override
-    public OrderResponse getOrderDetails(long orderId) {
+                log.info("OrderServiceImpl | getOrderDetails | Getting payment information form the payment Service");
+                PaymentResponse paymentResponse = restTemplate.getForObject(
+                                "http://PAYMENT-SERVICE/payment/order/" + order.getId(),
+                                PaymentResponse.class);
 
-        log.info("OrderServiceImpl | getOrderDetails | Get order details for Order Id : {}", orderId);
+                OrderResponse.ProductDetails productDetails = OrderResponse.ProductDetails
+                                .builder()
+                                .productName(productResponse.getProductName())
+                                .productId(productResponse.getProductId())
+                                .build();
 
-        Order order = orderRepository.findById(orderId)
-                .orElseThrow(() -> new OrderServiceCustomException("Order not found for the order Id:" + orderId,
-                        "NOT_FOUND",
-                        404));
+                OrderResponse.PaymentDetails paymentDetails = OrderResponse.PaymentDetails
+                                .builder()
+                                .paymentId(paymentResponse.getPaymentId())
+                                .paymentStatus(paymentResponse.getStatus())
+                                .paymentDate(paymentResponse.getPaymentDate())
+                                .paymentMode(paymentResponse.getPaymentMode())
+                                .build();
 
-        log.info("OrderServiceImpl | getOrderDetails | Invoking Product service to fetch the product for id: {}",
-                order.getProductId());
-        ProductResponse productResponse = restTemplate.getForObject(
-                "http://PRODUCT-SERVICE/product/" + order.getProductId(),
-                ProductResponse.class);
+                OrderResponse orderResponse = OrderResponse.builder()
+                                .orderId(order.getId())
+                                .orderStatus(order.getOrderStatus())
+                                .amount(order.getAmount())
+                                .orderDate(order.getOrderDate())
+                                .productDetails(productDetails)
+                                .paymentDetails(paymentDetails)
+                                .build();
 
-        log.info("OrderServiceImpl | getOrderDetails | Getting payment information form the payment Service");
-        PaymentResponse paymentResponse = restTemplate.getForObject(
-                "http://PAYMENT-SERVICE/payment/order/" + order.getId(),
-                PaymentResponse.class);
+                log.info("OrderServiceImpl | getOrderDetails | orderResponse : " + orderResponse.toString());
 
-        OrderResponse.ProductDetails productDetails = OrderResponse.ProductDetails
-                .builder()
-                .productName(productResponse.getProductName())
-                .productId(productResponse.getProductId())
-                .build();
-
-        OrderResponse.PaymentDetails paymentDetails = OrderResponse.PaymentDetails
-                .builder()
-                .paymentId(paymentResponse.getPaymentId())
-                .paymentStatus(paymentResponse.getStatus())
-                .paymentDate(paymentResponse.getPaymentDate())
-                .paymentMode(paymentResponse.getPaymentMode())
-                .build();
-
-        OrderResponse orderResponse = OrderResponse.builder()
-                .orderId(order.getId())
-                .orderStatus(order.getOrderStatus())
-                .amount(order.getAmount())
-                .orderDate(order.getOrderDate())
-                .productDetails(productDetails)
-                .paymentDetails(paymentDetails)
-                .build();
-
-        log.info("OrderServiceImpl | getOrderDetails | orderResponse : " + orderResponse.toString());
-
-        return orderResponse;
-    }
+                return orderResponse;
+        }
 }
