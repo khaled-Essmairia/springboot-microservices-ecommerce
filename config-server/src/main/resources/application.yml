@@ -1,0 +1,17 @@
+
+server:
+  port: 9296
+
+spring:
+  application:
+    name: CONFIG-SERVER
+  config:
+    import: configserver:http://${CONFIG_SERVER_URL:localhost}:9296
+  cloud:
+    config:
+      server:
+        git:
+          username: Essmairia-Kaled
+          password: Khaled
+          uri: https://github.com/Rapter1990/springappconfig
+          clone-on-start: true

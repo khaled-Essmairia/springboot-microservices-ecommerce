@@ -13,6 +13,8 @@ spring:
       ddl-auto: update
   application:
     name: ORDER-SERVICE
+  config:
+    import: configserver:http://${CONFIG_SERVER_URL:localhost}:9296
 
 #With spring-cloud-starter-netflix-eureka-client on the classpath, 
 #we just need to configure eureka.client.service-url.defaultZone property 
